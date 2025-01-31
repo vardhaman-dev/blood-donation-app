@@ -22,11 +22,12 @@ app.use(
   cors({
     origin: [
       "http://localhost:3000", // Local development
-      "https://rakt-blood-donation.netlify.app/",
+      "https://rakt-blood-donation.netlify.app", // Your Netlify site
     ],
     credentials: true,
   }),
 );
+
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -35,26 +36,43 @@ const getBloodTable = (bloodType) => {
   return `bld_${bloodType.replace("+", "p").replace("-", "n").toLowerCase()}`;
 };
 
-// Donate Blood Endpoint
 app.post("/donate-blood", async (req, res) => {
   const { name, bloodType, pincode, contact } = req.body;
 
   try {
-    // Insert donor
-    // In server.js donate-blood endpoint
+    // Check if donor with the same phone number already exists
+    const { data: existingDonor, error: existingDonorError } = await supabase
+      .from("donar")
+      .select("id")
+      .eq("phone", contact)
+      .single();
 
+    if (existingDonorError && existingDonorError.code !== "PGRST116") {
+      throw existingDonorError; // Handle error if it's not a "no data" error
+    }
+
+    if (existingDonor) {
+      return res
+        .status(409)
+        .send("A donor with this phone number already exists.");
+    }
+
+    // Insert new donor
     const { data: donor, error: donorError } = await supabase
       .from("donar")
       .insert([{ name, pincode, phone: contact }])
       .select("id");
-    // Remove .single()
 
     if (donorError) throw donorError;
+
+    // Ensure donor ID is retrieved correctly
+    const donorId = donor[0].id; // Access the ID from the returned data
+    console.log("Donor ID:", donorId); // Log the donor ID
 
     // Insert blood type
     const { error: bloodError } = await supabase
       .from(getBloodTable(bloodType))
-      .insert([{ did: donor.id }]);
+      .insert([{ did: donorId }]); // Use the donor ID here
 
     if (bloodError) throw bloodError;
 
@@ -130,14 +148,22 @@ app.post("/signup", async (req, res) => {
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("login")
       .insert([{ username, password: hashedPassword }]);
 
-    if (error) throw error;
-    res.status(201).send("User created successfully");
+    if (error) {
+      console.error("Supabase error:", error); // Log the Supabase error
+      if (error.code === "23505") {
+        // Unique violation error code
+        return res.status(409).send("Username already exists");
+      }
+      throw error; // For other errors, throw the error
+    }
+
+    res.status(201).send("User  created successfully");
   } catch (err) {
-    console.error("Supabase error:", err);
+    console.error("Error during signup:", err); // Log the error
     res.status(500).send("Error creating user");
   }
 });
