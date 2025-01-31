@@ -1,5 +1,8 @@
-// Define the API URL using an environment variable
-const apiUrl = process.env.API_URL || "http://localhost:3000"; // Fallback to localhost for local development
+// scripts.js (top of file)
+const apiUrl =
+  window.location.hostname === "localhost"
+    ? "http://localhost:3000"
+    : "https://617a5180-0f0f-46b9-8106-df14b7de8133@api.glitch.com/git/military-fork-mantis";
 
 function showHome() {
   document.getElementById("content").innerHTML = `
@@ -106,7 +109,8 @@ function showSearchForm() {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const formData = new FormData(form);
-    const formObject = Object.fromEntries(form, Data.entries());
+    // Fix this line in showSearchForm()
+    const formObject = Object.fromEntries(formData.entries()); // Remove the comma
 
     try {
       const response = await fetch(`${apiUrl}/search-donors`, {

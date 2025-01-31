@@ -1,474 +1,268 @@
-require("dotenv").config(); // Load environment variables from .env file
+require("dotenv").config();
 const express = require("express");
 const path = require("path");
-const oracledb = require("oracledb");
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
-const port = process.env.PORT || 3000; // Use environment variable for port
+const port = process.env.PORT || 3000;
+
+// Supabase configuration
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY,
+);
 
 // Middleware
-app.use(cors());
+// server.js
+app.use(
+  cors({
+    origin: [
+      "http://localhost:3000", // Local development
+      "https://majestic-strudel-51865f.netlify.app",
+    ],
+    credentials: true,
+  }),
+);
 app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, "public"))); // Serve static files from the 'public' folder
+app.use(express.static(path.join(__dirname, "public")));
 
-// Configure Oracle connection details using environment variables
-const dbConfig = {
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  connectString: process.env.DB_CONNECTION_STRING,
+// Helper function to convert blood type to table name
+const getBloodTable = (bloodType) => {
+  return `bld_${bloodType.replace("+", "p").replace("-", "n").toLowerCase()}`;
 };
 
-// Handle POST request for blood donation
+// Donate Blood Endpoint
 app.post("/donate-blood", async (req, res) => {
   const { name, bloodType, pincode, contact } = req.body;
 
   try {
-    // Establish Oracle database connection
-    const connection = await oracledb.getConnection(dbConfig);
+    // Insert donor
+    // In server.js donate-blood endpoint
 
-    // Insert donor data into DONAR table and get the donor ID (Did)
-    const insertDonorSql = ```javascript
-            INSERT INTO DONAR (NAME, PINCODE, PHONE)
-            VALUES (:name, :pincode, :contact)
-            RETURNING Did INTO :Did
-        `;
+    const { data: donor, error: donorError } = await supabase
+      .from("donar")
+      .insert([{ name, pincode, phone: contact }])
+      .select("id");
+    // Remove .single()
 
-    let donorResult = await connection.execute(
-      insertDonorSql,
-      {
-        name,
-        pincode,
-        contact,
-        Did: { type: oracledb.NUMBER, dir: oracledb.BIND_OUT },
-      },
-      { autoCommit: true },
-    );
+    if (donorError) throw donorError;
 
-    const donorId = donorResult.outBinds.Did[0];
+    // Insert blood type
+    const { error: bloodError } = await supabase
+      .from(getBloodTable(bloodType))
+      .insert([{ did: donor.id }]);
 
-    // Determine the blood type and insert into the corresponding table
-    let insertBloodTypeSql = "";
-    switch (bloodType) {
-      case "A+":
-        insertBloodTypeSql = "INSERT INTO BLD_AP (Did) VALUES (:donorId)";
-        break;
-      case "A-":
-        insertBloodTypeSql = "INSERT INTO BLD_AN (Did) VALUES (:donorId)";
-        break;
-      case "B+":
-        insertBloodTypeSql = "INSERT INTO BLD_BP (Did) VALUES (:donorId)";
-        break;
-      case "B-":
-        insertBloodTypeSql = "INSERT INTO BLD_BN (Did) VALUES (:donorId)";
-        break;
-      case "O+":
-        insertBloodTypeSql = "INSERT INTO BLD_OP (Did) VALUES (:donorId)";
-        break;
-      case "O-":
-        insertBloodTypeSql = "INSERT INTO BLD_ON (Did) VALUES (:donorId)";
-        break;
-      case "AB+":
-        insertBloodTypeSql = "INSERT INTO BLD_ABP (Did) VALUES (:donorId)";
-        break;
-      case "AB-":
-        insertBloodTypeSql = "INSERT INTO BLD_ABN (Did) VALUES (:donorId)";
-        break;
-      default:
-        throw new Error("Invalid blood type");
-    }
+    if (bloodError) throw bloodError;
 
-    // Insert into the corresponding blood type table
-    await connection.execute(
-      insertBloodTypeSql,
-      { donorId },
-      { autoCommit: true },
-    );
-
-    // Close the connection
-    await connection.close();
-
-    // Send response back to client
     res.send("Donation form received and stored in the database!");
   } catch (err) {
-    console.error("Error inserting data into Oracle:", err);
-    res.status(500).send("Error storing donor data in the database.");
+    console.error("Supabase error:", err);
+    res.status(500).send("Error storing donor data.");
   }
 });
 
-// Get donors by blood type
+// Get Donors by Blood Type
 app.get("/donors/:bloodType", async (req, res) => {
   const bloodType = req.params.bloodType;
-  let selectDonorsSql = "";
 
   try {
-    // Establish Oracle database connection
-    const connection = await oracledb.getConnection(dbConfig);
+    // Get donors from blood type table
+    const { data: bloodDonors, error: bloodError } = await supabase
+      .from(getBloodTable(bloodType))
+      .select("did");
 
-    // Determine the blood type table to query
-    switch (bloodType) {
-      case "A+":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_AP B ON D.Did = B.Did`;
-        break;
-      case "A-":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_AN B ON D.Did = B.Did`;
-        break;
-      case "B+":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_BP B ON D.Did = B.Did`;
-        break;
-      case "B-":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_BN B ON D.Did = B.Did`;
-        break;
-      case "O+":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_OP B ON D.Did = B.Did`;
-        break;
-      case "O-":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_ON B ON D.Did = B.Did`;
-        break;
-      case "AB+":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_ABP B ON D.Did = B.Did`;
-        break;
-      case "AB-":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_ABN B ON D.Did = B.Did`;
-        break;
-      default:
-        throw new Error("Invalid blood type");
-    }
+    if (bloodError) throw bloodError;
 
-    // Execute the query and fetch results
-    const result = await connection.execute(selectDonorsSql);
-    const donors = result.rows;
+    const donorIds = bloodDonors.map((b) => b.did);
 
-    // Close the connection
-    await connection.close();
+    // Get donor details
+    const { data: donors, error: donorError } = await supabase
+      .from("donar")
+      .select("name, pincode, phone")
+      .in("id", donorIds);
 
-    // Send the result back to the client
+    if (donorError) throw donorError;
+
     res.json({ donors });
   } catch (err) {
-    console.error("Error fetching data from Oracle:", err);
+    console.error("Supabase error:", err);
     res.status(500).send("Error retrieving donor data.");
   }
 });
 
-// Search donors by blood group and pincode
+// Search Donors
 app.post("/search-donors", async (req, res) => {
   const { bloodGroup, pincode } = req.body;
-  let selectDonorsSql = "";
 
   try {
-    const connection = await oracledb.getConnection(dbConfig);
+    // Get blood type donors
+    const { data: bloodDonors, error: bloodError } = await supabase
+      .from(getBloodTable(bloodGroup))
+      .select("did");
 
-    // Use the correct table based on the blood group
-    switch (bloodGroup) {
-      case "A+":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_AP B ON D.Did = B.Did
-                                   WHERE D.PINCODE = :pincode`;
-        break;
-      case "A-":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_AN B ON D.Did = B.Did
-                                   WHERE D.PINCODE = :pincode`;
-        break;
-      case "B+":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_BP B ON D.Did = B.Did
-                                   WHERE D.PINCODE = :pincode`;
-        break;
-      case "B-":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_BN B ON D.Did = B.Did
-                                   WHERE D.PINCODE = :pincode`;
-        break;
-      case "O+":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_OP B ON D.Did = B.Did
-                                   WHERE D.PINCODE = :pincode`;
-        break;
-      case "O-":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_ON B ON D.Did = B.Did
-                                   WHERE D.PINCODE = :pincode`;
-        break;
-      case "AB+":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_ABP B ON D.Did = B.Did
-                                   WHERE D.PINCODE = :pincode`;
-        break;
-      case "AB-":
-        selectDonorsSql = `SELECT D.NAME, D.PINCODE, D.PHONE
-                                   FROM DONAR D
-                                   JOIN BLD_ABN B ON D.Did = B.Did
-                                   WHERE D.PINCODE = :pincode`;
-        break;
-      default:
-        throw new Error("Invalid blood group");
-    }
+    if (bloodError) throw bloodError;
 
-    // Execute the query
-    const result = await connection.execute(selectDonorsSql, [pincode]);
+    const donorIds = bloodDonors.map((b) => b.did);
 
-    // Close the connection
-    await connection.close();
+    // Get matching donors
+    const { data: donors, error: donorError } = await supabase
+      .from("donar")
+      .select("name, pincode, phone")
+      .in("id", donorIds)
+      .eq("pincode", pincode);
 
-    // Send the result to the frontend
-    res.json({
-      donors: result.rows.map((row) => ({
-        name: row[0],
-        pincode: row[1],
-        phone: row[2],
-      })),
-    });
+    if (donorError) throw donorError;
+
+    res.json({ donors });
   } catch (err) {
-    console.error("Error fetching donor data:", err);
+    console.error("Supabase error:", err);
     res.status(500).send("Error retrieving donor data.");
   }
 });
 
-// Signup route
+// Authentication Endpoints
 app.post("/signup", async (req, res) => {
   const { username, password } = req.body;
 
   try {
-    const hashedPassword = await bcrypt.hash(password, 10); // Hash the password
-    const insertSql = `INSERT INTO LOGIN (USERNAME, PASSWORD) VALUES (:username, :password)`;
-    const connection = await oracledb.getConnection(dbConfig);
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const { error } = await supabase
+      .from("login")
+      .insert([{ username, password: hashedPassword }]);
 
-    await connection.execute(insertSql, [username, hashedPassword]);
-    await connection.commit();
-    await connection.close();
-
-    res.status(201).send("User  created successfully");
+    if (error) throw error;
+    res.status(201).send("User created successfully");
   } catch (err) {
-    console.error("Error during signup:", err);
+    console.error("Supabase error:", err);
     res.status(500).send("Error creating user");
   }
 });
 
-// Login route
 app.post("/login", async (req, res) => {
   const { username, password } = req.body;
 
   try {
-    const connection = await oracledb.getConnection(dbConfig);
-    const selectSql = `SELECT PASSWORD FROM LOGIN WHERE USERNAME = :username`;
-    const result = await connection.execute(selectSql, [username]);
+    const { data: user, error } = await supabase
+      .from("login")
+      .select("password")
+      .eq("username", username)
+      .single();
 
-    if (result.rows.length === 0) {
-      return res.status(401).send("User  not found");
-    }
+    if (error || !user) return res.status(401).send("User not found");
 
-    const isMatch = await bcrypt.compare(password, result.rows[0][0]);
-    if (!isMatch) {
-      return res.status(401).send("Invalid password");
-    }
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(401).send("Invalid password");
 
-    // Generate a token
     const token = jwt.sign({ username }, process.env.JWT_SECRET, {
       expiresIn: "1h",
     });
-    await connection.close();
-
     res.json({ token });
   } catch (err) {
-    console.error("Error during login:", err);
+    console.error("Supabase error:", err);
     res.status(500).send("Error logging in");
   }
 });
 
-// Middleware to authenticate token
-function authenticateToken(req, res, next) {
-  const token =
-    req.headers["authorization"] && req.headers["authorization"].split(" ")[1];
-
-  if (!token) return res.sendStatus(401); // Unauthorized
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403); // Forbidden
-    req.user = user; // Attach user info to request
-    next(); // Proceed to the next middleware or route handler
-  });
-}
-
-// Get all donors
+// Donor Management Endpoints
 app.get("/donors", async (req, res) => {
   try {
-    const connection = await oracledb.getConnection(dbConfig);
-    const result = await connection.execute("SELECT * FROM DONAR");
-    await connection.close();
+    const { data: donors, error } = await supabase.from("donar").select("*");
 
-    res.json(
-      result.rows.map((row) => ({
-        id: row[0],
-        name: row[1],
-        pincode: row[2],
-        phone: row[3],
-      })),
-    );
+    if (error) throw error;
+    res.json(donors);
   } catch (err) {
-    console.error("Error fetching donors:", err);
+    console.error("Supabase error:", err);
     res.status(500).send("Error retrieving donors.");
   }
 });
 
-// Delete donor by phone number
 app.delete("/donors/:phone", async (req, res) => {
   const phone = req.params.phone;
 
   try {
-    const connection = await oracledb.getConnection(dbConfig);
+    // Get donor
+    const { data: donor, error: donorError } = await supabase
+      .from("donar")
+      .select("id")
+      .eq("phone", phone)
+      .single();
 
-    // First, get the Did associated with the phone number
-    const getDidQuery = `SELECT Did FROM DONAR WHERE PHONE = :1`;
-    const didResult = await connection.execute(getDidQuery, [phone]);
+    if (!donor) return res.status(404).send("Donor not found");
 
-    if (didResult.rows.length === 0) {
-      await connection.close();
-      return res.status(404).send("Donor not found");
-    }
-
-    const did = didResult.rows[0][0];
-
-    // Delete from all blood type tables
+    // Delete from all blood tables
     const bloodTables = [
-      "BLD_AP",
-      "BLD_AN",
-      "BLD_BP",
-      "BLD_BN",
-      "BLD_ABP",
-      "BLD_ABN",
-      "BLD_OP",
-      "BLD_ON",
+      "bld_ap",
+      "bld_an",
+      "bld_bp",
+      "bld_bn",
+      "bld_abp",
+      "bld_abn",
+      "bld_op",
+      "bld_on",
     ];
 
     for (const table of bloodTables) {
-      const deleteBloodQuery = `DELETE FROM ${table} WHERE Did = :1`;
-      await connection.execute(deleteBloodQuery, [did], { autoCommit: false });
+      await supabase.from(table).delete().eq("did", donor.id);
     }
 
-    // Finally, delete from DONAR table
-    const deleteDonarQuery = `DELETE FROM DONAR WHERE PHONE = :1`;
-    await connection.execute(deleteDonarQuery, [phone], { autoCommit: true });
+    // Delete donor
+    await supabase.from("donar").delete().eq("phone", phone);
 
-    await connection.close();
     res.json({ message: "Donor deleted successfully" });
   } catch (err) {
-    console.error("Error deleting donor:", err);
+    console.error("Supabase error:", err);
     res.status(500).send("Error deleting donor");
   }
 });
 
-// Update donor by phone number
 app.put("/donors/:phone", async (req, res) => {
   const phone = req.params.phone;
   const { name, bloodType, pincode } = req.body;
 
   try {
-    const connection = await oracledb.getConnection(dbConfig);
+    // Get donor
+    const { data: donor, error: donorError } = await supabase
+      .from("donar")
+      .select("id")
+      .eq("phone", phone)
+      .single();
 
-    // First, get the Did associated with the phone number
-    const getDidQuery = `SELECT Did FROM DONAR WHERE PHONE = :1`;
-    const didResult = await connection.execute(getDidQuery, [phone]);
+    if (!donor) return res.status(404).send("Donor not found");
 
-    if (didResult.rows.length === 0) {
-      await connection.close();
-      return res.status(404).send("Donor not found");
-    }
+    // Update donor
+    await supabase.from("donar").update({ name, pincode }).eq("phone", phone);
 
-    const did = didResult.rows[0][0];
-
-    // Update DONAR table
-    const updateDonarQuery = `UPDATE DONAR SET NAME = :1, PINCODE = :2 WHERE PHONE = :3`;
-    await connection.execute(updateDonarQuery, [name, pincode, phone], {
-      autoCommit: false,
-    });
-
-    // Delete from all blood type tables
+    // Delete from all blood tables
     const bloodTables = [
-      "BLD_AP",
-      "BLD_AN",
-      "BLD_BP",
-      "BLD_BN",
-      "BLD_ABP",
-      "BLD_ABN",
-      "BLD_OP",
-      "BLD_ON",
+      "bld_ap",
+      "bld_an",
+      "bld_bp",
+      "bld_bn",
+      "bld_abp",
+      "bld_abn",
+      "bld_op",
+      "bld_on",
     ];
 
     for (const table of bloodTables) {
-      const deleteBloodQuery = `DELETE FROM ${table} WHERE Did = :1`;
-      await connection.execute(deleteBloodQuery, [did], { autoCommit: false });
+      await supabase.from(table).delete().eq("did", donor.id);
     }
 
-    // Insert into new blood type table
-    let insertTable;
-    switch (bloodType) {
-      case "A+":
-        insertTable = "BLD_AP";
-        break;
-      case "A-":
-        insertTable = "BLD_AN";
-        break;
-      case "B+":
-        insertTable = "BLD_BP";
-        break;
-      case "B-":
-        insertTable = "BLD_BN";
-        break;
-      case "AB+":
-        insertTable = "BLD_ABP";
-        break;
-      case "AB-":
-        insertTable = "BLD_ABN";
-        break;
-      case "O+":
-        insertTable = "BLD_OP";
-        break;
-      case "O-":
-        insertTable = "BLD_ON";
-        break;
-      default:
-        throw new Error("Invalid blood type");
-    }
+    // Insert new blood type
+    await supabase.from(getBloodTable(bloodType)).insert([{ did: donor.id }]);
 
-    const insertBloodQuery = `INSERT INTO ${insertTable} (Did) VALUES (:1)`;
-    await connection.execute(insertBloodQuery, [did], { autoCommit: true });
-
-    await connection.close();
     res.json({ message: "Donor updated successfully" });
   } catch (err) {
-    console.error("Error updating donor:", err);
+    console.error("Supabase error:", err);
     res.status(500).send("Error updating donor");
   }
 });
 
-// Start the server
+// Start server
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
