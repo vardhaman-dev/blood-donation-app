@@ -22,7 +22,7 @@ app.use(
   cors({
     origin: [
       "http://localhost:3000", // Local development
-      "https://majestic-strudel-51865f.netlify.app",
+      "https://rakt-blood-donation.netlify.app/",
     ],
     credentials: true,
   }),

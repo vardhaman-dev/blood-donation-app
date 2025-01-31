@@ -2,7 +2,7 @@
 const apiUrl =
   window.location.hostname === "localhost"
     ? "http://localhost:3000"
-    : "https://617a5180-0f0f-46b9-8106-df14b7de8133@api.glitch.com/git/military-fork-mantis";
+    : "https://military-fork-mantis.glitch.me/";
 
 function showHome() {
   document.getElementById("content").innerHTML = `
